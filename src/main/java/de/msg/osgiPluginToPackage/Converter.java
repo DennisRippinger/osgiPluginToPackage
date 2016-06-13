@@ -2,13 +2,15 @@ package de.msg.osgiPluginToPackage;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Properties;
+import java.util.jar.Attributes;
 import java.util.jar.Manifest;
 import java.util.stream.Collectors;
 
@@ -19,8 +21,10 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class Converter {
 
-	private static final String PLUGIN = "<YOURPLUGIN>";
-	public static final String PATH = "<YOURPATH>";
+	private static final String PLUGIN = "<- YOUR PLUGIN (SUFFIX) ->";
+	public static final String PATH = "<-YOUR PATH ->";
+
+	public static final String PROP_REQUIRE_BUNDLE = "Require-Bundle";
 
 	public SearchManifestFiles searchManifestFiles = new SearchManifestFiles();
 
@@ -35,29 +39,48 @@ public class Converter {
 			List<String> requiredPlugins = filterRequiredPlugins(manifest);
 
 			Path buildPropertiesPath = createBuildPropertiesPath(manifestFile);
+
 			if (!buildPropertiesPath.toFile().exists() || requiredPlugins.isEmpty())
 				continue;
 
-			StringBuilder buildProperties = new StringBuilder(new String(Files.readAllBytes(buildPropertiesPath)));
-			buildProperties.append(String.format("\nadditional.bundles = %s", requiredPlugins.get(0)));
-			requiredPlugins.remove(0);
+			Properties buildProperties = new Properties();
+			buildProperties.load(new FileInputStream(buildPropertiesPath.toFile()));
 
-			if (!requiredPlugins.isEmpty()) {
-				buildProperties.append(", \\\n");
+			String additionBundles = (String) buildProperties.get("additional.bundles");
+			if (additionBundles == null) {
+				additionBundles = "";
 			}
 
-			requiredPlugins.forEach(x -> buildProperties.append("               " + x + ",\\\n"));
+			additionBundles += requiredPlugins.stream().collect(Collectors.joining(","));
 
-			buildProperties.replace(buildProperties.lastIndexOf("\\"), buildProperties.lastIndexOf("\\") + 1, "");
+			removeRequiredPluginsFromManifest(manifest, requiredPlugins);
+			buildProperties.put("additional.bundles", additionBundles);
 
-			Files.write(Paths.get(buildPropertiesPath + "2"), buildProperties.toString().getBytes());
-
+			buildProperties.store(new FileOutputStream(buildPropertiesPath.toFile()), null);
+			manifest.write(new FileOutputStream(manifestFile.toFile()));
 		}
 
 	}
 
+	private void removeRequiredPluginsFromManifest(Manifest manifest, List<String> requiredPlugins) {
+		String exportPackage = manifest.getMainAttributes().getValue(PROP_REQUIRE_BUNDLE);
+		exportPackage = Arrays//
+				.asList(exportPackage.split(","))//
+				.stream()//
+				.filter(x -> !requiredPlugins.contains(x))//
+				.collect(Collectors.toList())//
+				.stream()//
+				.collect(Collectors.joining(","));
+
+		if ("".equals(exportPackage)) {
+			manifest.getMainAttributes().remove(new Attributes.Name(PROP_REQUIRE_BUNDLE));
+		} else {
+			manifest.getMainAttributes().put(new Attributes.Name(PROP_REQUIRE_BUNDLE), exportPackage);
+		}
+	}
+
 	/**
-	 * Basically ../build.properties
+	 * Basically cd ../build.properties
 	 *
 	 * @param manifestFile location of the manifest file.
 	 * @return path to build.properties.
@@ -68,7 +91,7 @@ public class Converter {
 
 	private List<String> filterRequiredPlugins(Manifest manifest) {
 
-		String exportPackage = manifest.getMainAttributes().getValue("Require-Bundle");
+		String exportPackage = manifest.getMainAttributes().getValue(PROP_REQUIRE_BUNDLE);
 
 		if (exportPackage == null)
 			return Collections.emptyList();
